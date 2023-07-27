@@ -152,7 +152,7 @@ class AlarmConfigurationWidget(QDialog):
             self.filter_layout.addWidget(self.filter_edit)
             if self.filter_edit.text():
                 self.enabled_checkbox.setEnabled(False)
-            self.filter_edit.textChanged.connect(self.uncheck_enabled_box_when_filter_set)
+            self.filter_edit.textChanged.connect(self.set_enabled_box_when_filter_set)
             self.layout.addLayout(self.filter_layout)
         self.layout.addWidget(self.guidance_label)
         self.layout.addWidget(self.guidance_table)
@@ -164,7 +164,7 @@ class AlarmConfigurationWidget(QDialog):
         self.cancel_button = QPushButton('Cancel')
         self.ok_button = QPushButton('OK')
         self.cancel_button.clicked.connect(self.close_window)
-        self.ok_button.clicked.connect(self.save_configuration)
+        self.ok_button.clicked.connect(lambda: self.save_configuration(True))
         self.ok_button.setDefault(True)
         if not can_take_action(UserAction.UPDATE_CONFIG):
             self.ok_button.setDisabled(True)
@@ -176,7 +176,9 @@ class AlarmConfigurationWidget(QDialog):
         self.setLayout(self.layout)
         self.layout.addLayout(self.button_layout)
 
-    def save_configuration(self):
+        self.enabled_checkbox_pre_disabled_value = self.enabled_checkbox.isChecked()
+
+    def save_configuration(self, closeWindow):
         """ Saves the input the user entered into the widget by sending it to the kafka config queue """
         if not can_take_action(UserAction.UPDATE_CONFIG, log_warning=True):
             return
@@ -231,17 +233,31 @@ class AlarmConfigurationWidget(QDialog):
                                      key=f'config:{self.alarm_item.path}',
                                      value={'user': username, 'host': hostname, 'guidance': guidance,
                                             'displays': displays, 'commands': commands})
+        if closeWindow:
+            self.close()
 
-        self.close()
-
-    def uncheck_enabled_box_when_filter_set(self):
-        """
+    def set_enabled_box_when_filter_set(self):
+        '''
         Grey out "Enabled" checkbox on config-page when enabling-filter is present.
         Avoids confusion over if checkbox needs to be checked when adding filter.
         Assume filter is valid if any text is present in text-edit (no easy way verify). 
-        """
+        '''
         editIsEmpty = not self.filter_edit.text()
+
         self.enabled_checkbox.setEnabled(editIsEmpty)
+
+        if editIsEmpty:
+            # Workaround for case when user has an active filter, and then clears filter-edit and saves config (want alarm to become enabled here).
+            # Kafka server does not update "Disabled" txt in status-msg when we send an empty-filter after an active-filter.
+            # Can "reboot" alarm's enabled-status on server and then not send any new filter-txt after its re-enabled,
+            # which will remove filter from the alarm and leave it enabled.
+            self.enabled_checkbox.setChecked(False)
+            self.save_configuration(False)
+            self.enabled_checkbox.setChecked(True) 
+            self.save_configuration(False)
+
+            # now since the filter-edit is cleared, set checkbox value back to before user added the filter
+            self.enabled_checkbox.setChecked(self.enabled_checkbox_pre_disabled_value)
 
     def uncheck_enabled_box_when_date_set(self):
         """ A simple slot for unchecking the enabled checkbox when the date time widget is set  """
